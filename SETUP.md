@@ -96,35 +96,54 @@ Alternatively, the bot can create sheets programmatically if the service account
 
 ## Running the Application
 
-### Option 1: Webhook Mode (Production)
+**IMPORTANT**: The new Google Sheets, Gmail, and Telegram servers use SSE transport and must be running separately before starting the agent.
 
-Start the Telegram webhook server:
+### Option 1: Complete Workflow with SSE Servers
+
+**Terminal 1 - Start SSE Servers:**
+
+```bash
+python start_sse_servers.py
+```
+
+This will start all SSE servers in the background:
+- Google Sheets on port 8100
+- Gmail on port 8101  
+- Telegram on port 8102
+
+**Terminal 2 - Start Telegram Webhook:**
 
 ```bash
 python telegram_webhook.py
 ```
 
-The server will run on port 8001 (or configured port).
+The webhook will run on port 8001 (default, but configurable).
 
-### Option 2: Local Development
+### Option 2: Local Development Mode
 
-For development, you can run individual MCP servers in dev mode:
+**Terminal 1 - Start SSE Servers:**
 
 ```bash
-# Start Google Sheets server (dev mode)
-python mcp_server_4_googlesheets.py dev
-
-# Start Gmail server (dev mode)
-python mcp_server_5_gmail.py dev
-
-# Start Telegram server (dev mode)
-python mcp_server_6_telegram.py dev
+python start_sse_servers.py
 ```
 
-Or run the main agent which will handle MCP servers automatically:
+**Terminal 2 - Run Agent:**
 
 ```bash
 python agent.py
+```
+
+Or for standalone SSE server testing:
+
+```bash
+# Start Google Sheets server
+python mcp_server_4_googlesheets.py
+
+# Start Gmail server  
+python mcp_server_5_gmail.py
+
+# Start Telegram server
+python mcp_server_6_telegram.py
 ```
 
 ## Testing the Workflow

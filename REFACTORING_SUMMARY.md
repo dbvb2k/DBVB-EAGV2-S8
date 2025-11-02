@@ -11,45 +11,58 @@ Successfully refactored the Agentic AI application to support:
 
 ### New MCP Servers
 
-Created three new MCP servers following the existing stdio transport pattern:
+Created three new MCP servers using **SSE transport**:
 
 1. **mcp_server_4_googlesheets.py**
    - `create_google_sheet()` - Create new sheets with data
    - `read_google_sheet()` - Read data from existing sheets
    - `append_to_sheet()` - Add rows to existing sheets
    - Uses `gspread` and Google Service Account credentials
+   - Runs on port 8100 via SSE
 
 2. **mcp_server_5_gmail.py**
    - `send_email()` - Send emails via Gmail API
    - `send_sheet_link()` - Convenience function to email sheet links
    - Supports OAuth2 flow with fallback to service account
    - Uses `google-api-python-client` and `google-auth`
+   - Runs on port 8101 via SSE
 
 3. **mcp_server_6_telegram.py**
    - `send_telegram_message()` - Send messages via Telegram bot
    - `get_telegram_updates()` - Retrieve bot updates
    - `send_telegram_reply()` - Reply to specific messages
    - Uses `requests` for Telegram Bot API calls
+   - Runs on port 8102 via SSE
 
 ### New Components
 
-1. **telegram_webhook.py**
+1. **core/mcp_sse_client.py**
+   - Custom SSE client for MCP protocol
+   - Connects to FastMCP SSE servers
+   - Handles bidirectional communication via SSE and POST
+
+2. **telegram_webhook.py**
    - FastAPI webhook server for Telegram
    - Processes incoming messages
    - Integrates with Agent Loop
    - Health check and webhook management endpoints
 
-2. **config.py**
+3. **config.py**
    - Centralized configuration for all services
    - Credentials, ports, API keys
    - Should not be committed to version control
 
-3. **credentials_setup.py**
+4. **credentials_setup.py**
    - One-time setup script for Gmail OAuth2
    - Handles authentication flow
    - Saves credentials for reuse
 
-4. **SETUP.md**
+5. **start_sse_servers.py**
+   - Convenience script to start all SSE servers
+   - Background process management
+   - Graceful shutdown handling
+
+6. **SETUP.md, README.md, etc.**
    - Comprehensive setup guide
    - Step-by-step instructions
    - Troubleshooting tips
@@ -57,21 +70,30 @@ Created three new MCP servers following the existing stdio transport pattern:
 ## Configuration Updates
 
 ### config/profiles.yaml
-Updated to include new MCP servers:
+Updated to include new MCP servers with transport specification:
 ```yaml
 mcp_servers:
   - id: math
     script: mcp_server_1.py
+    transport: stdio
   - id: documents
     script: mcp_server_2.py
+    transport: stdio
   - id: websearch
     script: mcp_server_3.py
+    transport: stdio
   - id: google_sheets
     script: mcp_server_4_googlesheets.py
+    transport: sse
+    url: http://127.0.0.1:8100
   - id: gmail
     script: mcp_server_5_gmail.py
+    transport: sse
+    url: http://127.0.0.1:8101
   - id: telegram
     script: mcp_server_6_telegram.py
+    transport: sse
+    url: http://127.0.0.1:8102
 ```
 
 ### pyproject.toml
@@ -80,9 +102,11 @@ Added new dependencies:
 - `uvicorn` - ASGI server
 - `google-api-python-client` - Google APIs
 - `google-auth` - Authentication
+- `google-auth-httplib2` - HTTP library for Google auth
 - `google-auth-oauthlib` - OAuth2 support
 - `gspread` - Google Sheets API
 - `pyyaml` - YAML parsing
+- `sseclient-py` - SSE client library
 
 ## Workflow Implementation
 
@@ -117,7 +141,12 @@ User receives: Email with Google Sheet link
 
 ## Transport Protocol
 
-**Note**: Originally planned for SSE (Server-Sent Events) transport, but FastMCP primarily supports stdio transport. All MCP servers use stdio for consistency with existing architecture.
+The application supports **both stdio and SSE transports**:
+
+- **stdio**: Math, documents, and web search servers use stdio for compatibility with existing architecture
+- **SSE**: Google Sheets, Gmail, and Telegram servers use SSE transport for enhanced capabilities
+
+A custom SSE client (`core/mcp_sse_client.py`) has been implemented to connect to FastMCP SSE servers using the MCP protocol over HTTP/SSE.
 
 The telegram_webhook.py runs as a separate FastAPI server that communicates with the agent system via the standard MultiMCP interface.
 
@@ -160,23 +189,27 @@ The telegram_webhook.py runs as a separate FastAPI server that communicates with
 
 ## Files Created
 
-1. `mcp_server_4_googlesheets.py` - Google Sheets operations
-2. `mcp_server_5_gmail.py` - Gmail operations
-3. `mcp_server_6_telegram.py` - Telegram bot operations
-4. `telegram_webhook.py` - FastAPI webhook server
-5. `config.py` - Application configuration
-6. `config.py.example` - Configuration template
-7. `credentials_setup.py` - OAuth2 setup helper
-8. `SETUP.md` - Setup instructions
-9. `README.md` - User documentation
-10. `REFACTORING_SUMMARY.md` - This file
-11. `.gitignore` - Version control exclusions
+1. `mcp_server_4_googlesheets.py` - Google Sheets operations (SSE)
+2. `mcp_server_5_gmail.py` - Gmail operations (SSE)
+3. `mcp_server_6_telegram.py` - Telegram bot operations (SSE)
+4. `core/mcp_sse_client.py` - Custom SSE client for MCP
+5. `telegram_webhook.py` - FastAPI webhook server
+6. `start_sse_servers.py` - SSE server startup script
+7. `config.py` - Application configuration
+8. `config.py.example` - Configuration template
+9. `credentials_setup.py` - OAuth2 setup helper
+10. `SETUP.md` - Setup instructions
+11. `README.md` - User documentation
+12. `REFACTORING_SUMMARY.md` - This file
+13. `verify_setup.py` - Setup verification script
+14. `.gitignore` - Version control exclusions
 
 ## Files Modified
 
-1. `config/profiles.yaml` - Added new MCP servers
-2. `pyproject.toml` - Added new dependencies
-3. `README.md` - Updated documentation
+1. `config/profiles.yaml` - Added new MCP servers with transport specification
+2. `core/session.py` - Added SSE transport support to MultiMCP
+3. `pyproject.toml` - Added new dependencies
+4. `README.md` - Updated documentation
 
 ## Next Steps
 
@@ -184,15 +217,18 @@ The telegram_webhook.py runs as a separate FastAPI server that communicates with
 2. Configure Telegram bot token
 3. Enable Google APIs
 4. Run OAuth2 setup for Gmail
-5. Test complete workflow
-6. Deploy webhook server for production
+5. **Start SSE servers**: `python start_sse_servers.py`
+6. Start telegram webhook: `python telegram_webhook.py`
+7. Test complete workflow
+8. Deploy webhook server for production
 
 ## Known Limitations
 
 1. Gmail requires OAuth2 for user emails (not just service accounts)
-2. FastMCP uses stdio, not SSE as originally planned
+2. SSE servers must be started separately before running the agent
 3. Telegram webhook needs public URL for production
 4. Google Service Account needs proper IAM roles
+5. SSE client implementation is custom and may need refinement based on actual MCP protocol requirements
 
 ## Dependencies Added
 
@@ -204,6 +240,7 @@ google-auth-httplib2>=0.2.0
 google-auth-oauthlib>=1.2.1
 gspread>=6.1.0
 pyyaml>=6.0.2
+sseclient-py>=1.8.0
 uvicorn>=0.30.0
 ```
 
@@ -211,5 +248,11 @@ uvicorn>=0.30.0
 
 The refactoring successfully adds Telegram, Gmail, and Google Sheets integration to the Agentic AI application. The modular MCP architecture allows tools to be discovered and used automatically by the agent, following the existing patterns in the codebase.
 
-All components follow the stdio transport protocol for consistency, and the webhook server provides the necessary interface for Telegram integration while maintaining separation of concerns.
+The implementation now supports **both stdio and SSE transports**:
+- Traditional stdio servers (math, documents, web search) for backward compatibility
+- SSE servers (Google Sheets, Gmail, Telegram) for enhanced capabilities
+
+A custom SSE client has been implemented to support FastMCP SSE transport, and the MultiMCP dispatcher intelligently routes tool calls to the appropriate transport protocol based on server configuration.
+
+The webhook server provides the necessary interface for Telegram integration while maintaining separation of concerns.
 

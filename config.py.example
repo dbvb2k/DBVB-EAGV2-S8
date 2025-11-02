@@ -24,7 +24,7 @@ GMAIL_SCOPES = [
 ]
 
 # Server Configuration
-SSE_PORT = 8000  # Port for SSE servers (not currently used, reserved for future)
+SSE_PORT = 8100  # Base port for SSE servers (Google Sheets: 8100, Gmail: 8101, Telegram: 8102)
 TELEGRAM_WEBHOOK_PORT = 8001  # Port for Telegram webhook
 
 # LLM Configuration

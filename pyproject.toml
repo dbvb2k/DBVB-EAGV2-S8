@@ -29,4 +29,5 @@ dependencies = [
     "tqdm>=4.67.1",
     "trafilatura[all]>=2.0.0",
     "uvicorn>=0.30.0",
+    "sseclient-py>=1.8.0",
 ]

@@ -28,21 +28,30 @@ mcp_servers:
   - id: math
     script: mcp_server_1.py
     cwd: .
+    transport: stdio
   - id: documents
     script: mcp_server_2.py
     cwd: .
+    transport: stdio
   - id: websearch
     script: mcp_server_3.py
     cwd: .
+    transport: stdio
   - id: google_sheets
     script: mcp_server_4_googlesheets.py
     cwd: .
+    transport: sse
+    url: http://127.0.0.1:8100
   - id: gmail
     script: mcp_server_5_gmail.py
     cwd: .
+    transport: sse
+    url: http://127.0.0.1:8101
   - id: telegram
     script: mcp_server_6_telegram.py
     cwd: .
+    transport: sse
+    url: http://127.0.0.1:8102
 
 
 

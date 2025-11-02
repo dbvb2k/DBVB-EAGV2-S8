@@ -1,4 +1,4 @@
-# mcp_server_5_gmail.py - Gmail MCP Server
+# mcp_server_5_gmail.py - Gmail MCP Server (SSE Transport)
 
 import sys
 import os
@@ -248,11 +248,13 @@ def get_email_info(email_id: str) -> str:
 
 
 if __name__ == "__main__":
-    print("Starting Gmail MCP Server...")
+    print("Starting Gmail MCP Server (SSE)...")
     if len(sys.argv) > 1 and sys.argv[1] == "dev":
         mcp.run()  # Development mode
     else:
-        # Run with stdio transport
-        mcp.run(transport="stdio")
-        print("\nShutting down...")
+        # Run with SSE transport
+        port = int(os.getenv("SSE_PORT", config.SSE_PORT)) + 1
+        mcp.run(transport="sse", host="127.0.0.1", port=port)
+        print(f"\nServer running on http://127.0.0.1:{port}")
+        print("Shutting down...")
 
