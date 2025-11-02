@@ -1,0 +1,33 @@
+# config.py.example - Configuration Template
+# Copy this file to config.py and fill in your actual values
+
+# Gmail Configuration
+SENDER_EMAIL = "your-email@gmail.com"  # Replace with your Gmail address
+RECEIVER_EMAIL = "receiver@gmail.com"  # Replace with receiver email
+
+# Telegram Bot Configuration
+TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"  # Get from @BotFather
+
+# Google API Configuration
+# Path to your Google API credentials JSON file
+GOOGLE_CREDENTIALS_PATH = "credentials/google_credentials.json"
+
+# Google Sheets Configuration
+SHEETS_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+# Gmail Scopes
+GMAIL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+]
+
+# Server Configuration
+SSE_PORT = 8000  # Port for SSE servers (not currently used, reserved for future)
+TELEGRAM_WEBHOOK_PORT = 8001  # Port for Telegram webhook
+
+# LLM Configuration
+GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"  # For Gemini 2.0 Flash
+OLLAMA_BASE_URL = "http://localhost:11434"  # Ollama fallback
+
