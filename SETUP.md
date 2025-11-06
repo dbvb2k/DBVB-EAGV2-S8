@@ -84,15 +84,26 @@ Place your credential files in it:
 - `credentials/google_credentials.json` - Service account credentials
 - `credentials/gmail_oauth_credentials.json` - OAuth2 credentials (for Gmail)
 
-### 7. Additional Configuration for Google Sheets
+### 7. Additional Configuration for Google Sheets (OAuth2)
 
-When using Google Sheets with a service account:
+The application uses OAuth2 user credentials for Google Sheets to ensure sheets are created in your Drive (using your storage quota) rather than the service account's Drive.
 
-1. Create a new Google Sheet manually
-2. Share it with the service account email (found in `google_credentials.json` as `client_email`)
-3. Give it "Editor" permissions
+**First-Time Setup:**
 
-Alternatively, the bot can create sheets programmatically if the service account has proper permissions.
+1. Make sure you have OAuth2 credentials (same as for Gmail):
+   - File: `credentials/gmail_oauth_credentials.json`
+   - If you don't have this, follow the Gmail OAuth2 setup steps above
+
+2. When you first start the Google Sheets server, it will:
+   - Detect the OAuth credentials
+   - Open a browser window for authorization
+   - Ask you to sign in with your Google account
+   - Request permissions for Google Sheets and Drive
+   - Save the authorization token for future use
+
+3. After authorization, sheets will be created in your personal Google Drive, using your storage quota.
+
+**Note:** The authorization token is saved in `credentials/sheets_token.pickle` and will be reused automatically. You only need to authorize once (or when the token expires).
 
 ## Running the Application
 

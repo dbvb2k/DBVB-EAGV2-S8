@@ -117,7 +117,7 @@ class MultiMCP:
         print(f"→ Connecting to SSE server: {base_url}")
         
         async with MCPSseClient(base_url) as sse_client:
-            # Send initialize request
+            # Send initialize request first
             init_message = {
                 "jsonrpc": "2.0",
                 "method": "initialize",
@@ -131,7 +131,21 @@ class MultiMCP:
                 }
             }
             
-            # Get tools
+            # Wait for initialization to complete
+            init_response = await sse_client.send_message(init_message)
+            if "error" in init_response:
+                raise RuntimeError(f"Initialization failed: {init_response['error']}")
+            
+            # Now send initialized notification (required by MCP protocol)
+            # Notifications don't have IDs and don't expect responses
+            initialized_message = {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {}
+            }
+            await sse_client.send_notification(initialized_message)
+            
+            # Get tools after initialization
             tools_message = {
                 "jsonrpc": "2.0",
                 "method": "tools/list",
@@ -183,6 +197,33 @@ class MultiMCP:
         base_url = config.get("url", "http://localhost:8000")
         
         async with MCPSseClient(base_url) as sse_client:
+            # Initialize the connection first
+            init_message = {
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "agent",
+                        "version": "1.0.0"
+                    }
+                }
+            }
+            
+            init_response = await sse_client.send_message(init_message)
+            if "error" in init_response:
+                raise RuntimeError(f"Initialization failed: {init_response['error']}")
+            
+            # Send initialized notification
+            initialized_message = {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {}
+            }
+            await sse_client.send_notification(initialized_message)
+            
+            # Now call the tool
             message = {
                 "jsonrpc": "2.0",
                 "method": "tools/call",
@@ -192,10 +233,19 @@ class MultiMCP:
                 }
             }
             
-            response = await sse_client.send_message(message)
+            try:
+                response = await sse_client.send_message(message)
+            except Exception as sse_error:
+                # If SSE communication fails, provide more context
+                error_msg = f"SSE communication error when calling {tool_name}: {sse_error}"
+                print(f"[ERROR] {error_msg}")
+                raise Exception(error_msg) from sse_error
             
             if "error" in response:
-                raise Exception(f"Tool call error: {response['error']}")
+                error_info = response["error"]
+                error_msg = error_info.get("message", str(error_info))
+                error_code = error_info.get("code", "unknown")
+                raise Exception(f"Tool call error ({error_code}): {error_msg}")
                 
             # Convert to CallToolResult format
             result_data = response.get("result", {})

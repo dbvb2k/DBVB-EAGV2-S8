@@ -12,6 +12,12 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 import json
 
+# Fix encoding issues on Windows
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 # Import config
 try:
     import config
@@ -146,7 +152,7 @@ def send_email(input: SendEmailInput) -> SendEmailOutput:
                 body=message
             ).execute()
             
-            print(f"✅ Email sent. Message ID: {sent_message['id']}")
+            print(f"[SUCCESS] Email sent. Message ID: {sent_message['id']}")
             
             return SendEmailOutput(
                 message_id=sent_message['id'],
@@ -164,7 +170,7 @@ def send_email(input: SendEmailInput) -> SendEmailOutput:
             )
     
     except Exception as e:
-        print(f"❌ Error sending email: {e}")
+        print(f"[ERROR] Error sending email: {e}")
         raise Exception(f"Failed to send email: {e}")
 
 
@@ -254,7 +260,11 @@ if __name__ == "__main__":
     else:
         # Run with SSE transport
         port = int(os.getenv("SSE_PORT", config.SSE_PORT)) + 1
-        mcp.run(transport="sse", host="127.0.0.1", port=port)
+        # Update settings for host and port
+        mcp.settings.host = "127.0.0.1"
+        mcp.settings.port = port
+        print(f"Server will run on http://127.0.0.1:{port}")
+        mcp.run(transport="sse")
         print(f"\nServer running on http://127.0.0.1:{port}")
         print("Shutting down...")
 

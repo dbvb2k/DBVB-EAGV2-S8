@@ -9,6 +9,12 @@ from pydantic import BaseModel
 from typing import List, Optional
 import requests
 
+# Fix encoding issues on Windows
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 # Import config
 try:
     import config
@@ -70,7 +76,7 @@ def send_telegram_message(input: SendTelegramMessageInput) -> SendTelegramMessag
         
         if result.get("ok"):
             message_id = result["result"]["message_id"]
-            print(f"✅ Telegram message sent. Message ID: {message_id}")
+            print(f"[SUCCESS] Telegram message sent. Message ID: {message_id}")
             
             return SendTelegramMessageOutput(
                 message_id=message_id,
@@ -81,10 +87,10 @@ def send_telegram_message(input: SendTelegramMessageInput) -> SendTelegramMessag
             raise Exception(f"Telegram API error: {error_msg}")
     
     except requests.exceptions.RequestException as e:
-        print(f"❌ Error sending Telegram message: {e}")
+        print(f"[ERROR] Error sending Telegram message: {e}")
         raise Exception(f"Failed to send Telegram message: {e}")
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        print(f"[ERROR] Unexpected error: {e}")
         raise Exception(f"Failed to send Telegram message: {e}")
 
 
@@ -116,7 +122,7 @@ def get_telegram_updates(last_update_id: Optional[int] = 0) -> str:
         
         if result.get("ok"):
             updates = result.get("result", [])
-            print(f"✅ Retrieved {len(updates)} updates from Telegram")
+            print(f"[SUCCESS] Retrieved {len(updates)} updates from Telegram")
             
             return json.dumps(updates, indent=2)
         else:
@@ -124,7 +130,7 @@ def get_telegram_updates(last_update_id: Optional[int] = 0) -> str:
             raise Exception(f"Telegram API error: {error_msg}")
     
     except requests.exceptions.RequestException as e:
-        print(f"❌ Error getting Telegram updates: {e}")
+        print(f"[ERROR] Error getting Telegram updates: {e}")
         raise Exception(f"Failed to get Telegram updates: {e}")
 
 
@@ -160,7 +166,7 @@ def send_telegram_reply(chat_id: str, reply_to_message_id: int, message: str) ->
         
         if result.get("ok"):
             message_id = result["result"]["message_id"]
-            print(f"✅ Telegram reply sent. Message ID: {message_id}")
+            print(f"[SUCCESS] Telegram reply sent. Message ID: {message_id}")
             
             return SendTelegramMessageOutput(
                 message_id=message_id,
@@ -171,7 +177,7 @@ def send_telegram_reply(chat_id: str, reply_to_message_id: int, message: str) ->
             raise Exception(f"Telegram API error: {error_msg}")
     
     except requests.exceptions.RequestException as e:
-        print(f"❌ Error sending Telegram reply: {e}")
+        print(f"[ERROR] Error sending Telegram reply: {e}")
         raise Exception(f"Failed to send Telegram reply: {e}")
 
 
@@ -203,7 +209,11 @@ if __name__ == "__main__":
     else:
         # Run with SSE transport
         port = int(os.getenv("SSE_PORT", config.SSE_PORT)) + 2
-        mcp.run(transport="sse", host="127.0.0.1", port=port)
+        # Update settings for host and port
+        mcp.settings.host = "127.0.0.1"
+        mcp.settings.port = port
+        print(f"Server will run on http://127.0.0.1:{port}")
+        mcp.run(transport="sse")
         print(f"\nServer running on http://127.0.0.1:{port}")
         print("Shutting down...")
 

@@ -10,6 +10,12 @@ from typing import List, Dict, Any
 import gspread
 from google.oauth2.service_account import Credentials
 
+# Fix encoding issues on Windows
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 # Import config
 try:
     import config
@@ -17,6 +23,7 @@ except ImportError:
     print("Warning: config.py not found. Please create it with required settings.")
     sys.exit(1)
 
+# Create FastMCP instance (settings can be updated later)
 mcp = FastMCP("google_sheets")
 
 
@@ -46,14 +53,98 @@ class ReadSheetOutput(BaseModel):
 
 # Initialize Google Sheets client
 def get_sheets_client():
-    """Get authenticated Google Sheets client."""
+    """Get authenticated Google Sheets client.
+    
+    Tries OAuth2 user credentials first (so sheets are created in user's Drive),
+    falls back to service account if OAuth2 is not available.
+    """
     try:
-        creds = Credentials.from_service_account_file(
-            config.GOOGLE_CREDENTIALS_PATH,
-            scopes=config.SHEETS_SCOPES
-        )
-        client = gspread.authorize(creds)
-        return client
+        # Try OAuth2 flow first (creates sheets in user's Drive, uses user's quota)
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        from google.auth.transport.requests import Request
+        import pickle
+        
+        creds = None
+        token_file = 'credentials/sheets_token.pickle'
+        
+        # Check if token exists
+        if os.path.exists(token_file):
+            try:
+                with open(token_file, 'rb') as token:
+                    creds = pickle.load(token)
+            except Exception as e:
+                print(f"[WARNING] Could not load token file: {e}")
+                creds = None
+        
+        # If no valid credentials, check for OAuth client secrets
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                try:
+                    print("[INFO] Token expired, refreshing...")
+                    creds.refresh(Request())
+                    print("[INFO] Token refreshed successfully")
+                except Exception as refresh_error:
+                    print(f"[WARNING] Could not refresh token: {refresh_error}")
+                    print("[INFO] Will need to re-authorize")
+                    creds = None
+            
+            if not creds or not creds.valid:
+                # Try to find OAuth credentials
+                oauth_creds_path = os.path.join(os.path.dirname(config.GOOGLE_CREDENTIALS_PATH), 'gmail_oauth_credentials.json')
+                if not os.path.exists(oauth_creds_path):
+                    # Try alternative path
+                    oauth_creds_path = os.path.join(os.path.dirname(config.GOOGLE_CREDENTIALS_PATH), 'oauth_credentials.json')
+                
+                if os.path.exists(oauth_creds_path):
+                    print("[INFO] Starting OAuth2 flow - a browser window will open")
+                    print("[INFO] If running in background, check server output for authorization URL")
+                    flow = InstalledAppFlow.from_client_secrets_file(oauth_creds_path, config.SHEETS_SCOPES)
+                    creds = flow.run_local_server(port=0)
+                    print("[INFO] OAuth2 authorization completed")
+                else:
+                    # Fall back to service account
+                    print("[INFO] No OAuth credentials found, using service account (sheets will use service account quota)")
+                    raise FileNotFoundError("OAuth credentials not found")
+            
+            # Save credentials for next time
+            if creds:
+                try:
+                    os.makedirs(os.path.dirname(token_file), exist_ok=True)
+                    with open(token_file, 'wb') as token:
+                        pickle.dump(creds, token)
+                    print("[INFO] Token saved successfully")
+                except Exception as save_error:
+                    print(f"[WARNING] Could not save token: {save_error}")
+        
+        # Authorize with gspread
+        try:
+            client = gspread.authorize(creds)
+            print("[INFO] Using OAuth2 user credentials (sheets will be created in your Drive)")
+            return client
+        except Exception as auth_error:
+            print(f"[ERROR] Failed to authorize with OAuth2 credentials: {auth_error}")
+            # If authorization fails, try to re-authenticate
+            if os.path.exists(token_file):
+                print("[INFO] Removing invalid token file, will re-authenticate on next attempt")
+                try:
+                    os.remove(token_file)
+                except:
+                    pass
+            raise
+        
+    except (FileNotFoundError, ImportError) as e:
+        # Fallback to service account
+        print(f"[INFO] OAuth2 not available ({e}), using service account")
+        try:
+            creds = Credentials.from_service_account_file(
+                config.GOOGLE_CREDENTIALS_PATH,
+                scopes=config.SHEETS_SCOPES
+            )
+            client = gspread.authorize(creds)
+            print("[WARNING] Using service account - sheets will use service account's Drive quota")
+            return client
+        except Exception as e2:
+            raise Exception(f"Failed to initialize Google Sheets client: {e2}")
     except Exception as e:
         raise Exception(f"Failed to initialize Google Sheets client: {e}")
 
@@ -88,10 +179,21 @@ def create_google_sheet(input: SheetDataInput) -> SheetDataOutput:
         if input.data:
             worksheet.append_rows(input.data)
         
-        # Make the sheet publicly readable (optional, for sharing)
-        spreadsheet.share("", perm_type="anyone", role="reader")
+        # If using service account, share with user's email
+        # (If using OAuth2, the sheet is already in the user's Drive)
+        try:
+            user_email = getattr(config, 'RECEIVER_EMAIL', None) or getattr(config, 'SENDER_EMAIL', None)
+            if user_email:
+                # Share with user email as editor
+                spreadsheet.share(user_email, perm_type='user', role='writer')
+                print(f"[INFO] Shared sheet with {user_email}")
+            # Also make it publicly readable for easy access
+            spreadsheet.share("", perm_type="anyone", role="reader")
+        except Exception as share_error:
+            print(f"[WARNING] Could not share sheet: {share_error}")
+            # Continue even if sharing fails
         
-        print(f"✅ Created Google Sheet: {spreadsheet.url}")
+        print(f"[SUCCESS] Created Google Sheet: {spreadsheet.url}")
         
         return SheetDataOutput(
             sheet_id=spreadsheet.id,
@@ -100,8 +202,12 @@ def create_google_sheet(input: SheetDataInput) -> SheetDataOutput:
         )
     
     except Exception as e:
-        print(f"❌ Error creating Google Sheet: {e}")
-        raise Exception(f"Failed to create Google Sheet: {e}")
+        error_msg = str(e)
+        print(f"[ERROR] Error creating Google Sheet: {error_msg}")
+        import traceback
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        # Return a more descriptive error
+        raise Exception(f"Failed to create Google Sheet: {error_msg}")
 
 
 @mcp.tool()
@@ -154,7 +260,7 @@ def read_google_sheet(input: ReadSheetInput) -> ReadSheetOutput:
         )
     
     except Exception as e:
-        print(f"❌ Error reading Google Sheet: {e}")
+        print(f"[ERROR] Error reading Google Sheet: {e}")
         raise Exception(f"Failed to read Google Sheet: {e}")
 
 
@@ -182,7 +288,7 @@ def append_to_sheet(spreadsheet_id: str, data: List[List[str]]) -> str:
         return f"Successfully appended {len(data)} rows to the sheet."
     
     except Exception as e:
-        print(f"❌ Error appending to Google Sheet: {e}")
+        print(f"[ERROR] Error appending to Google Sheet: {e}")
         raise Exception(f"Failed to append to Google Sheet: {e}")
 
 
@@ -209,7 +315,11 @@ if __name__ == "__main__":
     else:
         # Run with SSE transport
         port = int(os.getenv("SSE_PORT", config.SSE_PORT))
-        mcp.run(transport="sse", host="127.0.0.1", port=port)
+        # Update settings for host and port
+        mcp.settings.host = "127.0.0.1"
+        mcp.settings.port = port
+        print(f"Server will run on http://127.0.0.1:{port}")
+        mcp.run(transport="sse")
         print(f"\nServer running on http://127.0.0.1:{port}")
         print("Shutting down...")
 

@@ -48,12 +48,18 @@ class MemoryManager:
         self.embeddings: List[np.ndarray] = []
 
     def _get_embedding(self, text: str) -> np.ndarray:
-        response = requests.post(
-            self.embedding_model_url,
-            json={"model": self.model_name, "prompt": text}
-        )
-        response.raise_for_status()
-        return np.array(response.json()["embedding"], dtype=np.float32)
+        try:
+            response = requests.post(
+                self.embedding_model_url,
+                json={"model": self.model_name, "prompt": text},
+                timeout=5
+            )
+            response.raise_for_status()
+            return np.array(response.json()["embedding"], dtype=np.float32)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.HTTPError):
+            # If Ollama is not available, return a zero vector (memory will be disabled)
+            # Return a dummy embedding vector (384 dimensions for nomic-embed-text)
+            return np.zeros(384, dtype=np.float32)
 
     def add(self, item: MemoryItem):
         embedding = self._get_embedding(item.text)

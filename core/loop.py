@@ -17,10 +17,31 @@ class AgentLoop:
         self.tools = dispatcher.get_all_tools()
 
     def tool_expects_input(self, tool_name: str) -> bool:
-        tool = next((t for t in self.tools if getattr(t, "name", None) == tool_name), None)
+        # Handle both tool objects (stdio) and tool dicts (SSE)
+        tool = None
+        for t in self.tools:
+            # Check if it's a dict (SSE) or object (stdio)
+            if isinstance(t, dict):
+                if t.get("name") == tool_name:
+                    tool = t
+                    break
+            else:
+                if getattr(t, "name", None) == tool_name:
+                    tool = t
+                    break
+        
         if not tool:
             return False
-        parameters = getattr(tool, "parameters", {})
+        
+        # Get parameters - handle both dict and object
+        if isinstance(tool, dict):
+            parameters = tool.get("inputSchema", {}).get("properties", {})
+        else:
+            parameters = getattr(tool, "parameters", {})
+            # If parameters is a dict with 'properties', extract it
+            if isinstance(parameters, dict) and "properties" in parameters:
+                parameters = parameters["properties"]
+        
         return list(parameters.keys()) == ["input"]
 
     

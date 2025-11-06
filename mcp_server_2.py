@@ -41,9 +41,15 @@ ROOT = Path(__file__).parent.resolve()
 
 
 def get_embedding(text: str) -> np.ndarray:
-    response = requests.post(EMBED_URL, json={"model": EMBED_MODEL, "prompt": text})
-    response.raise_for_status()
-    return np.array(response.json()["embedding"], dtype=np.float32)
+    try:
+        response = requests.post(EMBED_URL, json={"model": EMBED_MODEL, "prompt": text}, timeout=5)
+        response.raise_for_status()
+        return np.array(response.json()["embedding"], dtype=np.float32)
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.HTTPError) as e:
+        # If Ollama is not available, return a zero vector (embeddings will be disabled)
+        mcp_log("WARNING", f"Ollama embeddings not available: {e}. Document search will work without semantic indexing.")
+        # Return a dummy embedding vector (384 dimensions for nomic-embed-text)
+        return np.zeros(384, dtype=np.float32)
 
 def chunk_text(text, size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
     words = text.split()
