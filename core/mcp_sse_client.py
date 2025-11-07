@@ -29,7 +29,7 @@ class MCPSseClient:
     - MCP protocol message handling
     """
     
-    def __init__(self, base_url: str, sse_path: str = "/sse", message_path: str = "/messages/"):
+    def __init__(self, base_url: str, sse_path: str = "/sse", message_path: str = "/messages/", timeout: float = 120.0):
         """
         Initialize MCP SSE client.
         
@@ -37,10 +37,12 @@ class MCPSseClient:
             base_url: Base URL of the MCP server (e.g., "http://localhost:8100")
             sse_path: Path for SSE endpoint (default: "/sse")
             message_path: Path for POST messages (default: "/messages/")
+            timeout: Timeout for requests in seconds (default: 120.0 for OAuth operations)
         """
         self.base_url = base_url.rstrip('/')
         self.sse_url = f"{self.base_url}{sse_path}"
         self.message_path = message_path
+        self.timeout = timeout
         self._session: Optional[httpx.AsyncClient] = None
         self._sse_response: Optional[httpx.Response] = None
         self._sse_stream_context = None  # Keep reference to stream context
@@ -52,7 +54,15 @@ class MCPSseClient:
         
     async def __aenter__(self):
         """Async context manager entry."""
-        self._session = httpx.AsyncClient()
+        # Create httpx client with increased timeout for long-running operations
+        # OAuth flows and API calls can take time
+        timeout = httpx.Timeout(
+            connect=10.0,  # Connection timeout
+            read=self.timeout,  # Read timeout (for SSE stream and responses)
+            write=30.0,  # Write timeout
+            pool=10.0  # Pool timeout
+        )
+        self._session = httpx.AsyncClient(timeout=timeout)
         # Establish SSE connection and get session_id
         await self._connect_sse()
         return self
@@ -163,6 +173,13 @@ class MCPSseClient:
                     
                     current_event = None  # Reset after processing data
                         
+        except httpx.ReadTimeout as e:
+            # Timeout during SSE stream read - this can happen for long operations
+            error_msg = f"SSE stream read timeout: {e}"
+            logger.warning(error_msg)
+            # Don't fail all requests - some might complete later
+            # Only fail requests that are actually waiting
+            logger.warning("SSE stream timeout - this may happen during long operations like OAuth")
         except Exception as e:
             error_msg = f"SSE stream error: {e}"
             logger.error(error_msg)
@@ -243,12 +260,15 @@ class MCPSseClient:
             response.raise_for_status()
             logger.debug(f"POST response status: {response.status_code}")
             
-            # Wait for response via SSE
-            result = await asyncio.wait_for(response_future, timeout=30.0)
+            # Wait for response via SSE (use instance timeout)
+            result = await asyncio.wait_for(response_future, timeout=self.timeout)
             return result
             
         except asyncio.TimeoutError:
-            raise TimeoutError(f"Request {request_id} timed out")
+            raise TimeoutError(
+                f"Request {request_id} timed out after {self.timeout} seconds. "
+                f"This may happen if OAuth authentication is required or the server is processing a long operation."
+            )
         finally:
             # Clean up pending request
             self._pending_requests.pop(request_id, None)

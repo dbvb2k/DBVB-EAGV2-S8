@@ -51,13 +51,32 @@ class ReadSheetOutput(BaseModel):
     headers: List[str] = None
 
 
+# Cache for Google Sheets client to avoid re-authentication on every call
+_sheets_client_cache = None
+
 # Initialize Google Sheets client
 def get_sheets_client():
     """Get authenticated Google Sheets client.
     
     Tries OAuth2 user credentials first (so sheets are created in user's Drive),
     falls back to service account if OAuth2 is not available.
+    
+    Uses caching to avoid re-authentication on every call.
     """
+    global _sheets_client_cache
+    
+    # Return cached client if available and still valid
+    if _sheets_client_cache is not None:
+        try:
+            # Try a simple operation to verify the client is still valid
+            # Just check if we can access the client object
+            if hasattr(_sheets_client_cache, 'list_spreadsheet_files'):
+                return _sheets_client_cache
+        except Exception:
+            # Client is invalid, reset cache
+            _sheets_client_cache = None
+            print("[INFO] Cached client invalid, re-authenticating...")
+    
     try:
         # Try OAuth2 flow first (creates sheets in user's Drive, uses user's quota)
         from google_auth_oauthlib.flow import InstalledAppFlow
@@ -67,11 +86,14 @@ def get_sheets_client():
         creds = None
         token_file = 'credentials/sheets_token.pickle'
         
+        print("[INFO] Getting Google Sheets client...")
+        
         # Check if token exists
         if os.path.exists(token_file):
             try:
                 with open(token_file, 'rb') as token:
                     creds = pickle.load(token)
+                print("[INFO] Loaded existing token")
             except Exception as e:
                 print(f"[WARNING] Could not load token file: {e}")
                 creds = None
@@ -96,11 +118,10 @@ def get_sheets_client():
                     oauth_creds_path = os.path.join(os.path.dirname(config.GOOGLE_CREDENTIALS_PATH), 'oauth_credentials.json')
                 
                 if os.path.exists(oauth_creds_path):
-                    print("[INFO] Starting OAuth2 flow - a browser window will open")
-                    print("[INFO] If running in background, check server output for authorization URL")
-                    flow = InstalledAppFlow.from_client_secrets_file(oauth_creds_path, config.SHEETS_SCOPES)
-                    creds = flow.run_local_server(port=0)
-                    print("[INFO] OAuth2 authorization completed")
+                    print("[ERROR] OAuth token expired and refresh failed. Please run setup_sheets_oauth.py to re-authorize.")
+                    print("[INFO] Falling back to service account for now...")
+                    # Don't try OAuth flow in server context (it's blocking)
+                    raise FileNotFoundError("OAuth token expired, re-authorization needed")
                 else:
                     # Fall back to service account
                     print("[INFO] No OAuth credentials found, using service account (sheets will use service account quota)")
@@ -120,6 +141,8 @@ def get_sheets_client():
         try:
             client = gspread.authorize(creds)
             print("[INFO] Using OAuth2 user credentials (sheets will be created in your Drive)")
+            # Cache the client
+            _sheets_client_cache = client
             return client
         except Exception as auth_error:
             print(f"[ERROR] Failed to authorize with OAuth2 credentials: {auth_error}")
@@ -142,6 +165,8 @@ def get_sheets_client():
             )
             client = gspread.authorize(creds)
             print("[WARNING] Using service account - sheets will use service account's Drive quota")
+            # Cache the client
+            _sheets_client_cache = client
             return client
         except Exception as e2:
             raise Exception(f"Failed to initialize Google Sheets client: {e2}")
@@ -160,24 +185,31 @@ def create_google_sheet(input: SheetDataInput) -> SheetDataOutput:
     Returns:
         SheetDataOutput with sheet_id, sheet_url, and worksheet_name
     """
-    print(f"CALLED: create_google_sheet with title: {input.title}")
+    print(f"[INFO] CALLED: create_google_sheet with title: {input.title}")
+    print(f"[INFO] Data rows: {len(input.data) if input.data else 0}")
     
     try:
+        print("[INFO] Getting Google Sheets client...")
         client = get_sheets_client()
+        print("[INFO] Client obtained, creating spreadsheet...")
         
         # Create a new spreadsheet
         spreadsheet = client.create(input.title)
+        print(f"[INFO] Spreadsheet created: {spreadsheet.id}")
         
         # Get the first worksheet
         worksheet = spreadsheet.sheet1
         
         # Add column headers if provided
         if input.column_headers:
+            print(f"[INFO] Adding column headers: {input.column_headers}")
             worksheet.append_row(input.column_headers)
         
         # Add data rows
         if input.data:
+            print(f"[INFO] Adding {len(input.data)} data rows...")
             worksheet.append_rows(input.data)
+            print("[INFO] Data rows added")
         
         # If using service account, share with user's email
         # (If using OAuth2, the sheet is already in the user's Drive)
@@ -185,10 +217,12 @@ def create_google_sheet(input: SheetDataInput) -> SheetDataOutput:
             user_email = getattr(config, 'RECEIVER_EMAIL', None) or getattr(config, 'SENDER_EMAIL', None)
             if user_email:
                 # Share with user email as editor
+                print(f"[INFO] Sharing sheet with {user_email}...")
                 spreadsheet.share(user_email, perm_type='user', role='writer')
                 print(f"[INFO] Shared sheet with {user_email}")
             # Also make it publicly readable for easy access
             spreadsheet.share("", perm_type="anyone", role="reader")
+            print("[INFO] Made sheet publicly readable")
         except Exception as share_error:
             print(f"[WARNING] Could not share sheet: {share_error}")
             # Continue even if sharing fails
