@@ -128,6 +128,25 @@ The application uses multiple MCP servers for different capabilities:
 4. Results stored in new Google Sheet
 5. Sheet link emailed to user via Gmail
 
+## 📸 Screenshots
+
+### Telegram Bot Interaction
+<img src="images/telegram_1.png" alt="Telegram Bot Interface" width="30%">
+
+*Screenshot showing the Telegram bot interface with user queries and responses*
+
+### Gmail Notification
+<img src="images/gmail_1.png" alt="Gmail Notification" width="30%">
+
+*Screenshot showing the email notification with the Google Sheet link*
+
+### Google Sheet Results
+<img src="images/gmail_2.png" alt="Google Sheet" width="30%">
+
+*Screenshot showing the automatically created Google Sheet with query results*
+
+
+
 ## 🔧 Configuration Files
 
 - **config.py**: Main configuration (credentials, ports, etc.)
