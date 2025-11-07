@@ -71,17 +71,21 @@ class MultiMCP:
     async def initialize(self):
         print("in MultiMCP initialize")
         for config in self.server_configs:
+            server_id = config.get('id', 'unknown')
+            transport = config.get("transport", "stdio")
             try:
                 # Check transport type
-                transport = config.get("transport", "stdio")
-                
                 if transport == "sse":
                     await self._initialize_sse_server(config)
                 else:
                     await self._initialize_stdio_server(config)
                     
             except Exception as e:
-                print(f"❌ Error initializing MCP server {config.get('id', 'unknown')}: {e}")
+                import traceback
+                error_msg = f"❌ Error initializing MCP server {server_id} ({transport}): {e}"
+                print(error_msg)
+                print(f"Traceback: {traceback.format_exc()}")
+                # Don't raise - continue with other servers, but log the error
                 
     async def _initialize_stdio_server(self, config: dict):
         """Initialize stdio-based MCP server."""
@@ -114,54 +118,76 @@ class MultiMCP:
             raise RuntimeError("SSE support not available. Install dependencies.")
             
         base_url = config.get("url", f"http://localhost:8000")
-        print(f"→ Connecting to SSE server: {base_url}")
+        server_id = config.get("id", "unknown")
+        print(f"→ Connecting to SSE server {server_id}: {base_url}")
         
-        async with MCPSseClient(base_url) as sse_client:
-            # Send initialize request first
-            init_message = {
-                "jsonrpc": "2.0",
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "agent",
-                        "version": "1.0.0"
+        try:
+            async with MCPSseClient(base_url) as sse_client:
+                # Send initialize request first
+                init_message = {
+                    "jsonrpc": "2.0",
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "agent",
+                            "version": "1.0.0"
+                        }
                     }
                 }
-            }
-            
-            # Wait for initialization to complete
-            init_response = await sse_client.send_message(init_message)
-            if "error" in init_response:
-                raise RuntimeError(f"Initialization failed: {init_response['error']}")
-            
-            # Now send initialized notification (required by MCP protocol)
-            # Notifications don't have IDs and don't expect responses
-            initialized_message = {
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized",
-                "params": {}
-            }
-            await sse_client.send_notification(initialized_message)
-            
-            # Get tools after initialization
-            tools_message = {
-                "jsonrpc": "2.0",
-                "method": "tools/list",
-                "params": {}
-            }
-            
-            response = await sse_client.send_message(tools_message)
-            
-            if response.get("result") and "tools" in response["result"]:
-                tools = response["result"]["tools"]
-                print(f"→ Tools received: {[tool['name'] for tool in tools]}")
-                for tool_data in tools:
-                    self.tool_map[tool_data["name"]] = {
-                        "config": config,
-                        "tool": tool_data
-                    }
+                
+                print(f"→ Initializing SSE server {server_id}...")
+                # Wait for initialization to complete
+                init_response = await sse_client.send_message(init_message)
+                if "error" in init_response:
+                    error_detail = init_response.get("error", {})
+                    error_msg = error_detail.get("message", str(error_detail))
+                    raise RuntimeError(f"Initialization failed for {server_id}: {error_msg}")
+                
+                print(f"→ SSE server {server_id} initialized, sending notification...")
+                # Now send initialized notification (required by MCP protocol)
+                # Notifications don't have IDs and don't expect responses
+                initialized_message = {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized",
+                    "params": {}
+                }
+                await sse_client.send_notification(initialized_message)
+                
+                # Get tools after initialization
+                tools_message = {
+                    "jsonrpc": "2.0",
+                    "method": "tools/list",
+                    "params": {}
+                }
+                
+                print(f"→ Requesting tools from SSE server {server_id}...")
+                response = await sse_client.send_message(tools_message)
+                
+                if "error" in response:
+                    error_detail = response.get("error", {})
+                    error_msg = error_detail.get("message", str(error_detail))
+                    raise RuntimeError(f"Failed to get tools from {server_id}: {error_msg}")
+                
+                if response.get("result") and "tools" in response["result"]:
+                    tools = response["result"]["tools"]
+                    tool_names = [tool['name'] for tool in tools]
+                    print(f"→ Tools received from {server_id}: {tool_names}")
+                    for tool_data in tools:
+                        self.tool_map[tool_data["name"]] = {
+                            "config": config,
+                            "tool": tool_data
+                        }
+                    print(f"→ Registered {len(tools)} tools from {server_id}")
+                else:
+                    print(f"⚠️  No tools received from {server_id}. Response: {response}")
+                    raise RuntimeError(f"No tools found in response from {server_id}")
+        except Exception as e:
+            print(f"❌ Error in _initialize_sse_server for {server_id}: {e}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            raise
 
     async def call_tool(self, tool_name: str, arguments: dict) -> Any:
         entry = self.tool_map.get(tool_name)
