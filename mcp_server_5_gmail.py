@@ -218,19 +218,32 @@ This is an automated message from your Agentic AI Assistant.
     
     # Try HTML first, fallback to plain text
     try:
-        return send_email(SendEmailInput(
+        result = send_email(SendEmailInput(
             to=to,
             subject=subject,
             body=body_html,
             is_html=True
         ))
-    except:
-        return send_email(SendEmailInput(
-            to=to,
-            subject=subject,
-            body=body_text,
-            is_html=False
-        ))
+        print(f"[SUCCESS] send_sheet_link completed (HTML)")
+        return result
+    except Exception as e1:
+        print(f"[WARNING] HTML email failed, trying plain text: {e1}")
+        try:
+            result = send_email(SendEmailInput(
+                to=to,
+                subject=subject,
+                body=body_text,
+                is_html=False
+            ))
+            print(f"[SUCCESS] send_sheet_link completed (plain text)")
+            return result
+        except Exception as e2:
+            print(f"[ERROR] Both HTML and plain text email failed: {e2}")
+            # Don't raise - return error info instead so agent can retry
+            return SendEmailOutput(
+                message_id="failed_" + str(hash(f"{to}{sheet_url}")),
+                status=f"failed: {str(e2)}"
+            )
 
 
 @mcp.resource("email://{email_id}")

@@ -153,21 +153,111 @@ def initialize_bot_info():
 initialize_bot_info()
 
 
-def send_telegram_message(chat_id: str, message: str, parse_mode: str = "HTML") -> bool:
-    """Send a message via Telegram."""
-    try:
-        url = f"{TELEGRAM_API_URL}/sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": message,
-            "parse_mode": parse_mode
-        }
-        response = requests.post(url, json=payload, timeout=10)
-        response.raise_for_status()
-        return response.json().get("ok", False)
-    except Exception as e:
-        logger.error(f"Failed to send Telegram message: {e}")
-        return False
+def send_telegram_message(chat_id: str, message: str, parse_mode: str = "HTML", max_retries: int = 3) -> bool:
+    """
+    Send a message via Telegram with retry logic.
+    
+    Args:
+        chat_id: Telegram chat ID
+        message: Message text to send
+        parse_mode: HTML or Markdown (default: HTML)
+        max_retries: Maximum number of retry attempts (default: 3)
+    
+    Returns:
+        True if message was sent successfully, False otherwise
+    """
+    import time
+    
+    response = None
+    for attempt in range(max_retries):
+        try:
+            url = f"{TELEGRAM_API_URL}/sendMessage"
+            payload = {
+                "chat_id": chat_id,
+                "text": message,
+                "parse_mode": parse_mode
+            }
+            
+            log("telegram", f"Sending message to chat {chat_id} (attempt {attempt + 1}/{max_retries})...")
+            response = requests.post(url, json=payload, timeout=15)
+            
+            # Check response
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("ok", False):
+                    log("telegram", f"✅ Message sent successfully to chat {chat_id}")
+                    return True
+                else:
+                    error_desc = result.get("description", "Unknown error")
+                    log("warning", f"Telegram API returned ok=false: {error_desc}")
+                    # Check if it's a rate limit error
+                    if "rate limit" in error_desc.lower() or response.status_code == 429:
+                        if attempt < max_retries - 1:
+                            wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                            log("warning", f"Rate limited, waiting {wait_time}s before retry...")
+                            time.sleep(wait_time)
+                            continue
+                    # For other errors, don't retry unless it's a network error
+                    if attempt < max_retries - 1 and (response.status_code >= 500 or response.status_code == 0):
+                        wait_time = 1 * (attempt + 1)
+                        log("warning", f"Server error {response.status_code}, waiting {wait_time}s before retry...")
+                        time.sleep(wait_time)
+                        continue
+                    return False
+            else:
+                log("warning", f"Telegram API returned status {response.status_code}: {response.text[:200]}")
+                # Retry on server errors (5xx) or timeout (0)
+                if attempt < max_retries - 1 and (response.status_code >= 500 or response.status_code == 0):
+                    wait_time = 1 * (attempt + 1)
+                    log("warning", f"Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                response.raise_for_status()
+                
+        except requests.exceptions.Timeout as e:
+            log("warning", f"Timeout sending Telegram message (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                wait_time = 1 * (attempt + 1)
+                log("warning", f"Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            return False
+        except requests.exceptions.ConnectionError as e:
+            log("warning", f"Connection error sending Telegram message (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                log("warning", f"Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            return False
+        except Exception as e:
+            error_msg = str(e)
+            log("error", f"Failed to send Telegram message (attempt {attempt + 1}/{max_retries}): {error_msg}")
+            
+            # Check if we have a response object to determine error type
+            error_response = None
+            if hasattr(e, 'response'):
+                error_response = e.response
+            elif response is not None:
+                error_response = response
+            
+            if error_response is not None and hasattr(error_response, 'status_code'):
+                status_code = error_response.status_code
+                # Don't retry on client errors (4xx except 429)
+                if 400 <= status_code < 500 and status_code != 429:
+                    log("error", f"Client error {status_code}, not retrying")
+                    return False
+            
+            # Retry on server errors or network issues
+            if attempt < max_retries - 1:
+                wait_time = 1 * (attempt + 1)
+                log("warning", f"Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            return False
+    
+    log("error", f"❌ Failed to send Telegram message after {max_retries} attempts")
+    return False
 
 
 async def process_query_with_agent(query: str, chat_id: str) -> str:
@@ -234,8 +324,26 @@ async def process_query_with_agent(query: str, chat_id: str) -> str:
         try:
             log("agent", "Starting agent loop...")
             final_response = await agent.run()
+            
             # Extract final answer from FINAL_ANSWER: prefix
-            answer = final_response.replace("FINAL_ANSWER:", "").strip().strip("[]")
+            if not final_response:
+                log("warning", "Agent returned empty response")
+                return "I processed your query, but couldn't generate a response. Please check your email for the Google Sheet with results."
+            
+            # Clean up the response
+            answer = final_response
+            if "FINAL_ANSWER:" in answer:
+                # Extract content after FINAL_ANSWER:
+                answer = answer.split("FINAL_ANSWER:", 1)[1].strip()
+            
+            # Remove brackets if present
+            answer = answer.strip().strip("[]").strip()
+            
+            # If answer is still empty or just whitespace, provide a fallback
+            if not answer or len(answer.strip()) == 0:
+                log("warning", "Agent returned empty answer after parsing")
+                return "I processed your query. Please check your email for the Google Sheet with detailed results."
+            
             log("agent", f"Agent completed. Final answer length: {len(answer)} chars")
             log("agent", f"Final answer preview: {answer[:200]}...")
             return answer
@@ -305,8 +413,23 @@ async def telegram_webhook(request: Request):
         # Log the update (but don't block on it)
         log("webhook", f"Received update {update_id}")
         
-        # Process asynchronously in background
-        asyncio.create_task(process_webhook_update(data))
+        # Process asynchronously in background with error handling
+        async def safe_process_update(update_data: dict):
+            """Wrapper to ensure errors in async task are logged."""
+            try:
+                await process_webhook_update(update_data)
+            except Exception as e:
+                import traceback
+                error_trace = traceback.format_exc()
+                log("error", f"Unhandled error in async webhook processing: {e}")
+                log("error", f"Traceback: {error_trace}")
+        
+        # Create task with error handling
+        task = asyncio.create_task(safe_process_update(data))
+        
+        # Optional: Store task reference for monitoring (could be used for cleanup)
+        # For now, just log that task was created
+        log("webhook", f"Created async task for update {update_id}")
         
         # Return 200 immediately to acknowledge receipt
         return Response(status_code=200)
@@ -381,27 +504,43 @@ Try: <i>"Find the Current Point Standings of F1 Racers"</i>
             log("webhook", f"Received answer from agent, length: {len(answer) if answer else 0}")
             
             # Send the result
-            if answer:
+            if answer and len(answer.strip()) > 0:
                 # Format answer nicely for Telegram
                 message_text = f"✅ <b>Result:</b>\n\n{answer}"
                 # Telegram has a 4096 character limit, truncate if needed
                 if len(message_text) > 4000:
                     message_text = message_text[:4000] + "\n\n... (truncated)"
-                send_telegram_message(str(chat_id), message_text)
-                log("webhook", "Successfully sent result to Telegram")
+                
+                # Send with retry logic and check result
+                success = send_telegram_message(str(chat_id), message_text)
+                if success:
+                    log("webhook", "✅ Successfully sent result to Telegram")
+                else:
+                    log("error", f"❌ Failed to send result to Telegram after retries for chat {chat_id}")
+                    # Try sending a shorter error message as fallback
+                    try:
+                        fallback_msg = "✅ Result received, but couldn't send full message. Please check your email for the Google Sheet."
+                        send_telegram_message(str(chat_id), fallback_msg, max_retries=1)
+                    except:
+                        log("error", "Failed to send fallback message as well")
             else:
                 log("webhook", "Agent returned empty answer")
-                send_telegram_message(str(chat_id), "❌ Sorry, I couldn't process your query.")
+                error_msg = "❌ Sorry, I couldn't process your query."
+                success = send_telegram_message(str(chat_id), error_msg)
+                if not success:
+                    log("error", f"Failed to send error message to chat {chat_id}")
         
         except Exception as e:
             import traceback
             error_trace = traceback.format_exc()
             log("error", f"Error processing query: {e}")
             log("error", f"Traceback: {error_trace}")
-            try:
-                send_telegram_message(str(chat_id), f"❌ Sorry, an error occurred: {str(e)}")
-            except:
-                log("error", "Failed to send error message to user")
+            
+            # Send error message to user with retry
+            error_msg = f"❌ Sorry, an error occurred while processing your query: {str(e)[:200]}"
+            success = send_telegram_message(str(chat_id), error_msg)
+            if not success:
+                log("error", f"Failed to send error message to chat {chat_id} after retries")
     
     except Exception as e:
         import traceback

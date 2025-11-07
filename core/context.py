@@ -65,6 +65,11 @@ class AgentContext:
         self.memory_trace: List[MemoryItem] = []
         self.tool_calls: List[ToolCallTrace] = []
         self.final_answer: Optional[str] = None
+        # Track sheet and email status for ensuring email is sent
+        self.sheet_created: bool = False
+        self.sheet_url: Optional[str] = None
+        self.sheet_title: Optional[str] = None
+        self.email_sent: bool = False
 
     def add_tool_trace(self, name: str, args: Dict[str, Any], result: Any):
         trace = ToolCallTrace(name, args, result)
