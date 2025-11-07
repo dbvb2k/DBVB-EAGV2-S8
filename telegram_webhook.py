@@ -37,6 +37,13 @@ app = FastAPI(title="Telegram Agent Webhook")
 # Telegram Bot API
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}"
 
+# Track processed update IDs to prevent duplicate processing
+processed_updates = set()
+MAX_PROCESSED_UPDATES = 1000  # Limit memory usage
+
+# Bot user ID (will be set during startup)
+BOT_USER_ID = None
+
 # SSE Server URLs (from config)
 SSE_SERVERS = {
     "google_sheets": "http://127.0.0.1:8100",
@@ -123,6 +130,27 @@ def log(stage: str, msg: str):
     """Simple timestamped logger."""
     now = datetime.now().strftime("%H:%M:%S")
     logger.info(f"[{now}] [{stage}] {msg}")
+
+
+# Get bot info to filter out bot's own messages (after log function is defined)
+def initialize_bot_info():
+    """Initialize bot user ID to filter out bot's own messages."""
+    global BOT_USER_ID
+    try:
+        bot_info_response = requests.get(f"{TELEGRAM_API_URL}/getMe", timeout=5)
+        if bot_info_response.status_code == 200:
+            BOT_USER_ID = bot_info_response.json().get("result", {}).get("id")
+            log("startup", f"Bot user ID: {BOT_USER_ID}")
+        else:
+            BOT_USER_ID = None
+            log("warning", "Could not get bot info, won't filter bot messages")
+    except Exception as e:
+        BOT_USER_ID = None
+        log("warning", f"Could not get bot info: {e}, won't filter bot messages")
+
+
+# Initialize bot info on startup
+initialize_bot_info()
 
 
 def send_telegram_message(chat_id: str, message: str, parse_mode: str = "HTML") -> bool:
@@ -253,20 +281,60 @@ async def health():
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
     """Handle incoming Telegram webhook updates."""
+    # Return 200 immediately to acknowledge receipt (prevents Telegram retries)
+    # Then process asynchronously
+    
     try:
         data = await request.json()
+        update_id = data.get("update_id")
         
-        # Log the update
-        log("webhook", f"Received update: {json.dumps(data, indent=2)[:200]}")
+        # Check if we've already processed this update
+        if update_id in processed_updates:
+            log("webhook", f"Duplicate update {update_id}, ignoring")
+            return Response(status_code=200)
         
+        # Add to processed set
+        processed_updates.add(update_id)
+        
+        # Clean up old update IDs to prevent memory leak
+        if len(processed_updates) > MAX_PROCESSED_UPDATES:
+            # Remove oldest 100 entries (simple cleanup)
+            oldest = sorted(processed_updates)[:100]
+            processed_updates.difference_update(oldest)
+        
+        # Log the update (but don't block on it)
+        log("webhook", f"Received update {update_id}")
+        
+        # Process asynchronously in background
+        asyncio.create_task(process_webhook_update(data))
+        
+        # Return 200 immediately to acknowledge receipt
+        return Response(status_code=200)
+    
+    except Exception as e:
+        log("error", f"Webhook error: {e}")
+        # Still return 200 to prevent Telegram from retrying
+        return Response(status_code=200)
+
+
+async def process_webhook_update(data: dict):
+    """Process a webhook update asynchronously."""
+    try:
         # Extract message data
         if "message" not in data:
-            return Response(status_code=200)  # Not a message, ignore
+            return  # Not a message, ignore
         
         message = data["message"]
         chat_id = message["chat"]["id"]
         text = message.get("text", "")
         message_id = message["message_id"]
+        from_user = message.get("from", {})
+        user_id = from_user.get("id")
+        
+        # Filter out bot's own messages (prevent infinite loop)
+        if BOT_USER_ID and user_id == BOT_USER_ID:
+            log("webhook", f"Ignoring message from bot itself (user_id: {user_id})")
+            return
         
         # Handle bot commands
         if text.startswith("/start"):
@@ -281,7 +349,7 @@ Send me a query and I'll:
 Try: <i>"Find the Current Point Standings of F1 Racers"</i>
             """
             send_telegram_message(str(chat_id), welcome_msg)
-            return Response(status_code=200)
+            return
         
         if text.startswith("/help"):
             help_msg = """
@@ -297,15 +365,15 @@ Try: <i>"Find the Current Point Standings of F1 Racers"</i>
 • Search for AI trends in 2024
             """
             send_telegram_message(str(chat_id), help_msg)
-            return Response(status_code=200)
+            return
         
         # Ignore empty messages
         if not text or len(text.strip()) == 0:
-            return Response(status_code=200)
+            return
         
-        # Process the query asynchronously
+        # Process the query
         try:
-            log("webhook", f"Processing query from chat {chat_id}: {text[:100]}")
+            log("webhook", f"Processing query from chat {chat_id} (user {user_id}): {text[:100]}")
             
             # Run agent
             answer = await process_query_with_agent(text, str(chat_id))
@@ -315,11 +383,11 @@ Try: <i>"Find the Current Point Standings of F1 Racers"</i>
             # Send the result
             if answer:
                 # Format answer nicely for Telegram
-                message = f"✅ <b>Result:</b>\n\n{answer}"
+                message_text = f"✅ <b>Result:</b>\n\n{answer}"
                 # Telegram has a 4096 character limit, truncate if needed
-                if len(message) > 4000:
-                    message = message[:4000] + "\n\n... (truncated)"
-                send_telegram_message(str(chat_id), message)
+                if len(message_text) > 4000:
+                    message_text = message_text[:4000] + "\n\n... (truncated)"
+                send_telegram_message(str(chat_id), message_text)
                 log("webhook", "Successfully sent result to Telegram")
             else:
                 log("webhook", "Agent returned empty answer")
@@ -330,13 +398,15 @@ Try: <i>"Find the Current Point Standings of F1 Racers"</i>
             error_trace = traceback.format_exc()
             log("error", f"Error processing query: {e}")
             log("error", f"Traceback: {error_trace}")
-            send_telegram_message(str(chat_id), f"❌ Sorry, an error occurred: {str(e)}")
-        
-        return Response(status_code=200)
+            try:
+                send_telegram_message(str(chat_id), f"❌ Sorry, an error occurred: {str(e)}")
+            except:
+                log("error", "Failed to send error message to user")
     
     except Exception as e:
-        log("error", f"Webhook error: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        import traceback
+        log("error", f"Error in process_webhook_update: {e}")
+        log("error", f"Traceback: {traceback.format_exc()}")
 
 
 @app.get("/set_webhook")
